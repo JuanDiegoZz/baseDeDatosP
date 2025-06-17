@@ -1,0 +1,182 @@
+-- ########## TABLAS DE NORMALIZACIÓN Y CATÁLOGOS ##########
+
+CREATE TABLE roles (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(50) UNIQUE NOT NULL,
+    descripcion TEXT,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE estados_reporte (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(50) UNIQUE NOT NULL,
+    descripcion TEXT,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE categorias_reporte (
+    id SERIAL PRIMARY KEY,
+    nombre VARCHAR(100) UNIQUE NOT NULL,
+    descripcion TEXT,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ########## TABLAS PRINCIPALES CON AUDITORÍA COMPLETA ##########
+
+CREATE TABLE usuarios (
+    id SERIAL PRIMARY KEY,
+    rol_id INTEGER NOT NULL REFERENCES roles(id),
+    nombre VARCHAR(100) NOT NULL,
+    apellido VARCHAR(100) NOT NULL,
+    localidad VARCHAR(100) NOT NULL,
+    telefono VARCHAR(15),
+    correo VARCHAR(150) UNIQUE NOT NULL,
+    contrasena VARCHAR(255) NOT NULL,
+    verificado BOOLEAN NOT NULL DEFAULT FALSE,
+    token_verificacion VARCHAR(255),
+    ultimo_login TIMESTAMP,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Quién modificó por última vez (puede ser el mismo usuario o un admin)
+    actualizado_por_id INTEGER REFERENCES usuarios(id)
+);
+
+CREATE TABLE reportes (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    categoria_id INTEGER NOT NULL REFERENCES categorias_reporte(id),
+    estado_id INTEGER NOT NULL REFERENCES estados_reporte(id),
+    titulo TEXT NOT NULL,
+    descripcion TEXT NOT NULL,
+    direccion TEXT,
+    latitud NUMERIC(10, 7),
+    longitud NUMERIC(10, 7),
+    imagen_url TEXT,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE, -- Para archivar o desactivar un reporte sin eliminarlo
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    -- Quién actualizó el reporte (ej. un admin que cambió el estado)
+    actualizado_por_id INTEGER REFERENCES usuarios(id)
+);
+
+-- NUEVA TABLA: Comentarios sobre los reportes
+CREATE TABLE comentarios (
+    id SERIAL PRIMARY KEY,
+    reporte_id INTEGER NOT NULL REFERENCES reportes(id) ON DELETE CASCADE, -- Si se borra el reporte, se borran los comentarios
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id), -- Quién hizo el comentario
+    contenido TEXT NOT NULL,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE, -- Para moderación (ocultar un comentario)
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ########## TABLAS DE SEGURIDAD Y LOGS CON AUDITORÍA ##########
+
+-- El historial es inmutable, por lo que no necesita 'actualizado_en'
+CREATE TABLE historial_estados_reporte (
+    id SERIAL PRIMARY KEY,
+    reporte_id INTEGER NOT NULL REFERENCES reportes(id),
+    estado_anterior_id INTEGER REFERENCES estados_reporte(id),
+    estado_nuevo_id INTEGER NOT NULL REFERENCES estados_reporte(id),
+    -- Quién hizo el cambio (un admin, por ej.)
+    usuario_modificacion_id INTEGER NOT NULL REFERENCES usuarios(id),
+    comentario TEXT,
+    fecha_cambio TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE api_keys (
+    id SERIAL PRIMARY KEY,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    llave VARCHAR(255) UNIQUE NOT NULL,
+    descripcion TEXT,
+    fecha_expiracion TIMESTAMP,
+    -- Auditoría y Estado
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    creado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    actualizado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    creado_por_id INTEGER NOT NULL REFERENCES usuarios(id),
+    actualizado_por_id INTEGER REFERENCES usuarios(id)
+);
+
+-- Las tablas de logs como esta y la de tokens revocados son registros inmutables.
+-- No se modifican, solo se insertan. Por lo tanto, no necesitan campos de 'actualización'.
+CREATE TABLE tokens_revocados (
+    id SERIAL PRIMARY KEY,
+    jti VARCHAR(255) UNIQUE NOT NULL,
+    usuario_id INTEGER NOT NULL REFERENCES usuarios(id),
+    fecha_revocacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE logs_api (
+    id BIGSERIAL PRIMARY KEY,
+    usuario_id INTEGER REFERENCES usuarios(id),
+    api_key_id INTEGER REFERENCES api_keys(id),
+    endpoint VARCHAR(255) NOT NULL,
+    metodo VARCHAR(10) NOT NULL,
+    ip_origen VARCHAR(45) NOT NULL,
+    codigo_respuesta INTEGER NOT NULL,
+    fecha_peticion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ Aplicación de los Triggers de Auditoría
+
+
+-- Aplicar el trigger a cada tabla relevante
+CREATE TRIGGER tr_actualizar_timestamp_roles
+BEFORE UPDATE ON roles
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_estados_reporte
+BEFORE UPDATE ON estados_reporte
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_categorias_reporte
+BEFORE UPDATE ON categorias_reporte
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_usuarios
+BEFORE UPDATE ON usuarios
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_reportes
+BEFORE UPDATE ON reportes
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_comentarios
+BEFORE UPDATE ON comentarios
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+CREATE TRIGGER tr_actualizar_timestamp_api_keys
+BEFORE UPDATE ON api_keys
+FOR EACH ROW EXECUTE FUNCTION fn_actualizar_timestamp();
+
+
+Función y Trigger para Auditoría Automática
+
+-- Función para actualizar el timestamp de la columna 'actualizado_en'
+CREATE OR REPLACE FUNCTION fn_actualizar_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.actualizado_en = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
